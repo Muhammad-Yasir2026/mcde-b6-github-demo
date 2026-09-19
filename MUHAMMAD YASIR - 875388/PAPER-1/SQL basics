@@ -1,0 +1,225 @@
+
+--1
+
+SELECT 
+    o.order_id,
+    CONCAT_WS(' ', c.first_name, c.last_name) AS customer_name,
+    st.store_name,
+    CONCAT_WS(' ', sf.first_name, sf.last_name) AS staff_name
+FROM sales.orders o
+JOIN sales.customers c ON o.customer_id = c.customer_id
+JOIN sales.stores st ON o.store_id = st.store_id
+JOIN sales.staffs sf ON o.staff_id = sf.staff_id;
+
+
+--2
+
+SELECT 
+    p.product_id,
+    p.product_name,
+    b.brand_name,
+    c.category_name
+FROM production.products p
+LEFT JOIN production.brands b ON p.brand_id = b.brand_id
+LEFT JOIN production.categories c ON p.category_id = c.category_id;
+
+
+--3
+
+SELECT 
+    CONCAT_WS(' ', c.first_name, c.last_name) AS customer_name,
+    c.city,
+    c.email
+FROM sales.customers c
+LEFT JOIN sales.orders o ON c.customer_id = o.customer_id
+WHERE o.order_id IS NULL;
+
+
+--4
+
+SELECT 
+    st.store_name,
+    ISNULL(SUM(oi.quantity * oi.list_price * (1 - oi.discount)), 0) AS total_revenue
+FROM sales.stores st
+LEFT JOIN sales.orders o ON st.store_id = o.store_id
+LEFT JOIN sales.order_items oi ON o.order_id = oi.order_id
+GROUP BY st.store_id, st.store_name
+ORDER BY total_revenue DESC;
+
+
+--5
+
+SELECT 
+    b.brand_name,
+    COUNT(p.product_id) AS product_count,
+    AVG(p.list_price) AS avg_list_price,
+    MAX(p.list_price) AS max_list_price
+FROM production.brands b
+JOIN production.products p ON b.brand_id = p.brand_id
+GROUP BY b.brand_id, b.brand_name
+HAVING COUNT(p.product_id) > 5;
+
+
+
+--6
+
+SELECT 
+    MONTH(o.order_date) AS order_month,
+    COUNT(DISTINCT o.order_id) AS total_orders,
+    SUM(oi.quantity * oi.list_price * (1 - oi.discount)) AS total_revenue
+FROM sales.orders o
+JOIN sales.order_items oi ON o.order_id = oi.order_id
+WHERE YEAR(o.order_date) = 2017
+GROUP BY MONTH(o.order_date)
+ORDER BY order_month ASC;
+
+
+
+--7
+
+SELECT 
+    p1.product_id,
+    p1.product_name,
+    p1.category_id,
+    p1.list_price
+FROM production.products p1
+WHERE p1.list_price > (
+    SELECT AVG(p2.list_price)
+    FROM production.products p2
+    WHERE p2.category_id = p1.category_id
+);
+
+
+
+--8
+
+SELECT 
+    c.customer_id,
+    CONCAT_WS(' ', c.first_name, c.last_name) AS customer_name,
+    COUNT(o.order_id) AS order_count
+FROM sales.customers c
+JOIN sales.orders o ON c.customer_id = o.customer_id
+GROUP BY c.customer_id, c.first_name, c.last_name
+HAVING COUNT(o.order_id) > (
+    SELECT AVG(1.0 * customer_order_counts.total_orders)
+    FROM (
+        SELECT COUNT(order_id) AS total_orders
+        FROM sales.orders
+        GROUP BY customer_id
+    ) AS customer_order_counts
+);
+
+
+
+--9
+
+WITH CustomerSpend AS (
+    SELECT 
+        c.customer_id,
+        CONCAT_WS(' ', c.first_name, c.last_name) AS customer_name,
+        ISNULL(SUM(oi.quantity * oi.list_price * (1 - oi.discount)), 0) AS total_spend
+    FROM sales.customers c
+    JOIN sales.orders o ON c.customer_id = o.customer_id
+    JOIN sales.order_items oi ON o.order_id = oi.order_id
+    GROUP BY c.customer_id, c.first_name, c.last_name
+),
+CustomerLabel AS (
+    SELECT 
+        customer_id,
+        customer_name,
+        total_spend,
+        DENSE_RANK() OVER (ORDER BY total_spend DESC) AS spend_rank,
+        CASE 
+            WHEN total_spend > (SELECT AVG(total_spend) FROM CustomerSpend) THEN 'High'
+            ELSE 'Regular'
+        END AS customer_category
+    FROM CustomerSpend
+)
+SELECT TOP 10 
+    customer_id,
+    customer_name,
+    total_spend,
+    spend_rank,
+    customer_category
+FROM CustomerLabel
+ORDER BY spend_rank ASC;
+
+
+--10
+
+WITH ProductSales AS (
+    SELECT 
+        p.category_id,
+        p.product_id,
+        p.product_name,
+        SUM(oi.quantity) AS total_quantity_sold,
+        DENSE_RANK() OVER (PARTITION BY p.category_id ORDER BY SUM(oi.quantity) DESC) AS rnk
+    FROM production.products p
+    JOIN sales.order_items oi ON p.product_id = oi.product_id
+    GROUP BY p.category_id, p.product_id, p.product_name
+),
+StockSummary AS (
+    SELECT 
+        product_id,
+        SUM(quantity) AS total_stock_available
+    FROM production.stocks
+    GROUP BY product_id
+)
+SELECT 
+    c.category_name,
+    ps.product_name,
+    ps.total_quantity_sold,
+    ISNULL(ss.total_stock_available, 0) AS total_stock_available
+FROM ProductSales ps
+JOIN production.categories c ON ps.category_id = c.category_id
+LEFT JOIN StockSummary ss ON ps.product_id = ss.product_id
+WHERE ps.rnk = 1;
+
+
+--Bonus Challenge 1
+
+WITH CustomerOrderCounts AS (
+    SELECT 
+        customer_id,
+        COUNT(order_id) AS order_count
+    FROM sales.orders
+    GROUP BY customer_id
+),
+AverageOrderCount AS (
+    SELECT 
+        AVG(1.0 * order_count) AS avg_orders
+    FROM CustomerOrderCounts
+)
+SELECT 
+    c.customer_id,
+    CONCAT_WS(' ', c.first_name, c.last_name) AS customer_name,
+    coc.order_count
+FROM CustomerOrderCounts coc
+JOIN sales.customers c ON coc.customer_id = c.customer_id
+CROSS JOIN AverageOrderCount aoc
+WHERE coc.order_count > aoc.avg_orders;
+
+
+
+--Bonus Challenge 2
+
+WITH StoreRevenue AS (
+    SELECT 
+        st.store_id,
+        st.store_name,
+        ISNULL(SUM(oi.quantity * oi.list_price * (1 - oi.discount)), 0) AS store_revenue
+    FROM sales.stores st
+    LEFT JOIN sales.orders o ON st.store_id = o.store_id
+    LEFT JOIN sales.order_items oi ON o.order_id = oi.order_id
+    GROUP BY st.store_id, st.store_name
+)
+SELECT 
+    store_name,
+    store_revenue,
+    ROUND(
+        (store_revenue / NULLIF(SUM(store_revenue) OVER (), 0)) * 100, 
+        2
+    ) AS percentage_share
+FROM StoreRevenue
+ORDER BY store_revenue DESC;
+
