@@ -1,0 +1,38 @@
+--Task 29: Find all products whose list price is above the overall average list price.
+
+SELECT product_name, list_price
+FROM production.products
+WHERE list_price > (SELECT AVG(list_price) FROM production.products);
+
+
+--Task 30: Find customers who have never placed an order.
+
+SELECT customer_id, first_name, last_name
+FROM sales.customers
+WHERE customer_id NOT IN (SELECT DISTINCT customer_id FROM sales.orders);
+
+
+--Task 31: List the most expensive product in each category.
+
+WITH RankedProducts AS (
+    SELECT product_name, category_id, list_price,
+           ROW_NUMBER() OVER (PARTITION BY category_id ORDER BY list_price DESC) AS rn
+    FROM production.products
+)
+SELECT product_name, category_id, list_price
+FROM RankedProducts
+WHERE rn = 1;
+
+
+--Task 32: Find staff members who work in the store that generated the most revenue.
+
+SELECT first_name, last_name, store_id
+FROM sales.staffs
+WHERE store_id = (
+    SELECT TOP 1 o.store_id
+    FROM sales.orders o
+    JOIN sales.order_items oi ON o.order_id = oi.order_id
+    GROUP BY o.store_id
+    ORDER BY SUM(oi.quantity * oi.list_price * (1 - oi.discount)) DESC
+);
+
